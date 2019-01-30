@@ -3,14 +3,14 @@ import os
 import sys
 import struct
 
-from util import dump_json_from_file, write_vmd_header, get_file_size
+from util import dump_json_from_file, write_vmd_header, get_file_size, Vertex_Attributes
 
 
 def main():
     """
     Main logic for the converter.
     """
-    # sys.argv.append("D:\\Game_Shapes")  # Debugging purposes
+    sys.argv.append("D:\\Game_Shapes")  # Debugging purposes
     if len(sys.argv) == 1 or not os.path.isdir(sys.argv[1]):
         print_help()
         return
@@ -63,7 +63,65 @@ def convert_gltf(file_name, dir_name):
     metadata = dump_json_from_file(file_name)
 
     with (open(vmd_file_name, mode='wb')) as vmd:
+        if 'meshes' not in metadata or len(metadata['meshes']) == 0:
+            return
+
         write_vmd_header(vmd)
+
+        vmd.seek(0x18, 0)
+        vmd.write(struct.pack('>i', get_file_size(vmd)))
+        vmd.write(struct.pack('>i', len(metadata['meshes'])))
+        vmd.seek(0, 2)
+
+        for m in metadata['meshes']:
+            vmd.write(struct.pack('>i', len(m['primitives'])))
+
+            for p in m['primitives']:
+                vmd.write(struct.pack('>i', len(p['attributes']) + 1))
+
+                for a in p['attributes']:
+                    # Skinning data will be handled differently
+                    if a.startswith('JOINTS') or a.startswith('WEIGHTS'):
+                        continue
+
+                    vmd.write(struct.pack('>i', Vertex_Attributes[a].value))
+
+                    att_accessor = metadata['accessors'][p['attributes'][a]]
+
+                    vmd.write(struct.pack('>i', 1))
+
+                    if att_accessor['componentType'] == 5126:
+                        vmd.write(struct.pack('>i', 4))
+                    elif att_accessor['componentType'] == 5123:
+                        vmd.write(struct.pack('>i', 2))
+
+                    vmd.write(struct.pack('>b', 0))
+                    vmd.write(struct.pack('>b', -1))
+                    vmd.write(struct.pack('>b', -1))
+                    vmd.write(struct.pack('>b', -1))
+
+                # We need to have a null attribute to end the attribute list
+                vmd.write(struct.pack('>i', 255))
+                vmd.write(struct.pack('>i', 1))
+                vmd.write(struct.pack('>i', 0))
+                vmd.write(struct.pack('>b', 0))
+                vmd.write(struct.pack('>b', -1))
+                vmd.write(struct.pack('>b', -1))
+                vmd.write(struct.pack('>b', -1))
+
+                for a in p['attributes']:
+                    att_accessor = metadata['accessors'][p['attributes'][a]]
+                    att_view = metadata['bufferViews'][att_accessor['bufferView']]
+
+                    vmd.write(struct.pack('>i', att_view['buffer']))
+                    vmd.write(struct.pack('>i', att_view['byteOffset']))
+                    vmd.write(struct.pack('>i', att_accessor['count']))
+
+                indices_accessor = metadata['accessors'][p['indices']]
+                indices_view = metadata['bufferViews'][indices_accessor['bufferView']]
+
+                vmd.write(struct.pack('>i', indices_view['byteOffset']))
+                vmd.write(struct.pack('>i', indices_accessor['count']))
 
         # Write the buffer data (binary data including vertices, indices, etc)
         # Not sure how many buffers GLTF allows, so VMD will support up to 8 for now.
